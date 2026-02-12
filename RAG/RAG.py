@@ -4,7 +4,7 @@ from datetime import date, datetime
 # Optional: Load environment variables if you have specific configurations
 # from dotenv import load_dotenv
 # load_dotenv()
-
+import httpx
 from langchain_community.vectorstores import FAISS
 from langchain_community.document_loaders import DirectoryLoader
 from langchain_community.docstore.document import Document
@@ -15,6 +15,7 @@ from langchain_community.vectorstores import FAISS
 
 from langchain_core.prompts import PromptTemplate
 from langchain.agents import create_agent
+from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
 # --- Configuration ---
 # Make sure Ollama is running with the specified model
@@ -106,9 +107,65 @@ def calculate_days_until(future_date_str: str) -> str:
         print(f"DEBUG: Exception in calculate_days_until: {e} for raw input: '{future_date_str}'")
         return f"An unexpected error occurred: {e}"
 
+
+# Web 搜索（DuckDuckGo）
+from ddgs import DDGS
+
+def ddgs_search(q: str) -> str:
+    items = []
+    with DDGS() as s:
+        for it in s.text(q.strip(), max_results=6):
+            items.append(f"{it['title']} :: {it['href']} :: {it['body']}")
+    return "\n".join(items)[:2000] or "no results"
+
+# 浏览器渲染（获取真实页面内容）
+from playwright.sync_api import sync_playwright
+
+def browser_render(url: str) -> str:
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(url.strip(), wait_until="domcontentloaded", timeout=30000)
+        html = page.content()
+        context.close(); browser.close()
+    return html[:4000]
+
+@tool
+def wikipedia(query: str) -> str:
+    """Search Wikipedia and return a short summary."""
+    try:
+        response = httpx.get(
+            "https://en.wikipedia.org/w/api.php",
+            params={
+                "action": "query",
+                "list": "search",
+                "srsearch": query,
+                "format": "json"
+            },
+            headers={"User-Agent": "LangChainAgent/1.0"},
+            timeout=10
+        )
+
+        if response.status_code == 403:
+            return "Wikipedia blocked automated access."
+
+        data = response.json()
+        results = data.get("query", {}).get("search", [])
+        if not results:
+            return "No Wikipedia results found."
+
+        return results[0]["snippet"]
+
+    except Exception as e:
+        return f"Wikipedia error: {e}"
+
+
+
+
 # --- 4. Create the Agent ---
 # a) Define the tools the agent can use
-tools = [get_current_date, get_current_time, calculate_days_until] # RAG tool is removed
+tools = [get_current_date, get_current_time, calculate_days_until, wikipedia] # RAG tool is removed
 
 # b) Get a standard ReAct prompt template
 # Create a custom prompt template
@@ -140,6 +197,8 @@ Final Answer: The comprehensive final answer to the original input question, syn
 - Only use the `get_current_date` tool if the question specifically asks for the current date.
 - Only use the `get_current_time` tool if the question specifically asks for the current time.
 - Only use the `calculate_days_until` tool if the question specifically asks to calculate the number of days until a future date, and provide the date in 'YYYY-MM-DD' format as the Action Input.
+- Only use the 'ddgs_search' tool if wikipedia did not provide sufficient information to answer the question.
+- Only use the `wikipedia` tool if the question specifically asks for information from Wikipedia.
 - If the RAG_CONTEXT is sufficient to answer the question, or if the question is general and does not require a tool, provide the answer directly in the "Final Answer" section after your initial "Thought".
 
 Begin!
@@ -205,6 +264,15 @@ Question:
                 {"role": "user", "content": final_input}
             ]
         })
+
+       
+        for m in response['messages']:
+            if isinstance(m, HumanMessage):
+                    print({"role": "user", "content": m.content})
+            elif isinstance(m, AIMessage):
+                print({"role": "assistant", "content": m.content})
+            elif isinstance(m, ToolMessage):
+                print({"role": "tool", "content": m.content})
 
         print("\nAgent Response:")
         print(response["messages"][-1].content)
