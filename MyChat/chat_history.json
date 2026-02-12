@@ -1,0 +1,12 @@
+{
+  "web-user": [
+    {
+      "role": "human",
+      "content": "Hi my name is Rong"
+    },
+    {
+      "role": "ai",
+      "content": "Nice to meet you, Rong! I'm a knowledge-based AI, and I'll be happy to help answer your questions based on the content provided. Please go ahead and ask me anything, and I'll do my best to provide helpful responses. What's on your mind?"
+    }
+  ]
+}
